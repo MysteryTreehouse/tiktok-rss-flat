@@ -67,7 +67,29 @@ async def user_videos():
                                 video_size = resp.headers.get('Content-Length', '0')
                             except Exception:
                                 video_size = '0'
-                            fe.enclosure(video_url, video_size, 'video/mp4')
+
+
+# 1) Download the MP4 into videos/<user>/<id>.mp4
+resp = requests.get(
+    video_url,
+    headers={"Range":"bytes=0-","Referer":"https://www.tiktok.com"},
+    cookies={"msToken": ms_token},
+    stream=True,
+    timeout=60
+)
+resp.raise_for_status()
+
+video_dir = Path("videos") / user
+video_dir.mkdir(parents=True, exist_ok=True)
+video_path = video_dir / f"{video.id}.mp4"
+with open(video_path, "wb") as f:
+    for chunk in resp.iter_content(8192):
+        f.write(chunk)
+
+# 2) Point your RSS item at *your* copy
+public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
+fe.enclosure(public_url, resp.headers.get("Content-Length", "0"), "video/mp4")
+
 
                         # Create description with thumbnail
                         desc_text = video.as_dict.get('desc', 'No Description')[:255]
