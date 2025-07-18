@@ -60,35 +60,43 @@ async def user_videos():
                         fe.link(href=link)
 
                         # Fetch video download URL and size
+                        # … inside your async for video in ttuser.videos(count=10): loop …
+
                         video_url = video.as_dict['video'].get('downloadAddr')
                         if video_url:
+                            # 1) HEAD for size (optional)
                             try:
-                                resp = requests.head(video_url, allow_redirects=True)
-                                video_size = resp.headers.get('Content-Length', '0')
+                                head = requests.head(video_url, allow_redirects=True)
+                                video_size = head.headers.get('Content-Length', '0')
                             except Exception:
                                 video_size = '0'
-
-
-//Download the MP4 into videos/<user>/<id>.mp4
-resp = requests.get(
-    video_url,
-    headers={"Range":"bytes=0-","Referer":"https://www.tiktok.com"},
-    cookies={"msToken": SZlePylllNpVeA4ow7_5iNFKW1QuO6fZytzA38HzOhzQ0Amj5PtmL_GjEEF9rU9jAVsxVm5XZKmv2Oo5CSyppvOZoKTMGHny6Zvl7OHiFGuKsRket_gIAWgTr7pnrtLK799g0Vt0yYbw3tmDFPsbU-ZM},
-    stream=True,
-    timeout=60
-)
-resp.raise_for_status()
-
-video_dir = Path("videos") / user
-video_dir.mkdir(parents=True, exist_ok=True)
-video_path = video_dir / f"{video.id}.mp4"
-with open(video_path, "wb") as f:
-    for chunk in resp.iter_content(8192):
-        f.write(chunk)
-
-//Point your RSS item at *your* copy
-public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
-fe.enclosure(public_url, resp.headers.get("Content-Length", "0"), "video/mp4")
+                    
+                            # 2) Download the MP4 with proper headers & msToken
+                            resp = requests.get(
+                                video_url,
+                                headers={
+                                    "Range": "bytes=0-",
+                                    "Referer": "https://www.tiktok.com"
+                                },
+                                cookies={"msToken": ms_token},
+                                stream=True,
+                                timeout=60
+                            )
+                            resp.raise_for_status()
+                    
+                            # 3) Write it to videos/<user>/<video.id>.mp4
+                            video_dir = Path("videos") / user
+                            video_dir.mkdir(parents=True, exist_ok=True)
+                            video_path = video_dir / f"{video.id}.mp4"
+                            with open(video_path, "wb") as f:
+                                for chunk in resp.iter_content(8192):
+                                    f.write(chunk)
+                    
+                            # 4) Point your RSS enclosure at *your* hosted copy
+                            public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
+                            fe.enclosure(public_url, video_size, "video/mp4")
+                    
+                        # … continue with your thumbnail & description logic …
 
 
                         # Create description with thumbnail
