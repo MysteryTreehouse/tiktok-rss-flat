@@ -3,4 +3,5 @@ asyncio
 feedgen
 TikTokApi
 config
+requests>=2.28.0
 
