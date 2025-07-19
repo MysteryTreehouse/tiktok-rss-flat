@@ -31,7 +31,7 @@ async def user_videos():
             fg = FeedGenerator()
             fg.id(f'https://www.tiktok.com/@{user}')
             fg.title(f'{user} TikTok')
-            fg.author({ 'name': 'Conor ONeill', 'email': 'conor@conoroneill.com' })
+            fg.author({'name': 'Conor ONeill', 'email': 'conor@conoroneill.com'})
             fg.link(href='http://tiktok.com', rel='alternate')
             fg.logo(ghRawURL + 'tiktok-rss.png')
             fg.subtitle(f'OK Boomer, all the latest TikToks from {user}')
@@ -59,72 +59,39 @@ async def user_videos():
                         fe.title(title)
                         fe.link(href=link)
 
-                        # Fetch video download URL and size
-                        # … inside your async for video in ttuser.videos(count=10): loop …
+                        # Fetch TikTok download URL
+                        video_url = video.as_dict['video'].get('downloadAddr')
+                        if video_url:
+                            # Try HEAD for size
+                            try:
+                                head = requests.head(video_url, allow_redirects=True)
+                                video_size = head.headers.get('Content-Length', '0')
+                            except Exception:
+                                video_size = '0'
 
-                         video_url = video.as_dict['video'].get('downloadAddr')
-                    -    if video_url:
-                    -        try:
-                    -            head = requests.head(video_url, allow_redirects=True)
-                    -            video_size = head.headers.get('Content-Length', '0')
-                    -        except Exception:
-                    -            video_size = '0'
-                    -
-                    -        # Download unconditionally (this is where the 403 comes)
-                    -        resp = requests.get(
-                    -            video_url,
-                    -            headers={"Range": "bytes=0-", "Referer": "https://www.tiktok.com"},
-                    -            cookies={"msToken": ms_token},
-                    -            stream=True,
-                    -            timeout=60
-                    -        )
-                    -        resp.raise_for_status()
-                    -
-                    -        video_dir = Path("videos") / user
-                    -        video_dir.mkdir(parents=True, exist_ok=True)
-                    -        video_path = video_dir / f"{video.id}.mp4"
-                    -        with open(video_path, "wb") as f:
-                    -            for chunk in resp.iter_content(8192):
-                    -                f.write(chunk)
-                    -
-                    -        public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
-                    -        fe.enclosure(public_url, video_size, "video/mp4")
-                    +    if video_url:
-                    +        # First, try to HEAD to get size (optional)
-                    +        try:
-                    +            head = requests.head(video_url, allow_redirects=True)
-                    +            video_size = head.headers.get('Content-Length', '0')
-                    +        except Exception:
-                    +            video_size = '0'
-                    +
-                    +        # Now try to download + self-host; on fail, fall back to original URL
-                    +        try:
-                    +            resp = requests.get(
-                    +                video_url,
-                    +                headers={"Range": "bytes=0-", "Referer": "https://www.tiktok.com"},
-                    +                cookies={"msToken": ms_token},
-                    +                stream=True,
-                    +                timeout=60
-                    +            )
-                    +            resp.raise_for_status()
-                    +
-                    +            video_dir = Path("videos") / user
-                    +            video_dir.mkdir(parents=True, exist_ok=True)
-                    +            video_path = video_dir / f"{video.id}.mp4"
-                    +            with open(video_path, "wb") as f:
-                    +                for chunk in resp.iter_content(8192):
-                    +                    f.write(chunk)
-                    +
-                    +            public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
-                    +            fe.enclosure(public_url, resp.headers.get("Content-Length", video_size), "video/mp4")
-                    +        except Exception as e:
-                    +            print(f"[WARN] failed to download self-host MP4 for {video_url!r}: {e}")
-                    +            # fallback to the upstream TikTok URL
-                    +            fe.enclosure(video_url, video_size, "video/mp4")
+                            # Attempt self-host download, fallback on failure
+                            try:
+                                resp = requests.get(
+                                    video_url,
+                                    headers={"Range": "bytes=0-", "Referer": "https://www.tiktok.com"},
+                                    cookies={"msToken": ms_token},
+                                    stream=True,
+                                    timeout=60
+                                )
+                                resp.raise_for_status()
 
-                    
-                        # … continue with your thumbnail & description logic …
+                                video_dir = Path("videos") / user
+                                video_dir.mkdir(parents=True, exist_ok=True)
+                                video_path = video_dir / f"{video.id}.mp4"
+                                with open(video_path, "wb") as f:
+                                    for chunk in resp.iter_content(8192):
+                                        f.write(chunk)
 
+                                public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
+                                fe.enclosure(public_url, resp.headers.get("Content-Length", video_size), "video/mp4")
+                            except Exception as e:
+                                print(f"[WARN] failed to download self-host MP4 for {video_url!r}: {e}")
+                                fe.enclosure(video_url, video_size, "video/mp4")
 
                         # Create description with thumbnail
                         desc_text = video.as_dict.get('desc', 'No Description')[:255]
@@ -144,7 +111,9 @@ async def user_videos():
 
                         fe.content(content)
 
-                    fg.updated(updated)
+                    # After looping all videos, write out the feed
+                    if updated:
+                        fg.updated(updated)
                     fg.rss_file(f'rss/{user}.xml', pretty=True)
                 except Exception as e:
                     print(f"Error for user {user}: {e}")
