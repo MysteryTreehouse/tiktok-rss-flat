@@ -44,55 +44,63 @@ async def user_videos():
                 try:
                     await ttuser.info()
                     async for video in ttuser.videos(count=10):
+                        # Safely convert Video model to dict
+                        try:
+                            video_data = video.dict()
+                        except:
+                            video_data = {}
+
                         fe = fg.add_entry()
-                        link = f'https://tiktok.com/@{user}/video/{video.id}'
+                        vid_id = video.id if hasattr(video, 'id') else video_data.get('id')
+                        link = f'https://tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
-                        ts = datetime.fromtimestamp(video.as_dict['createTime'], timezone.utc)
-                        fe.published(ts)
-                        fe.updated(ts)
-                        updated = max(ts, updated) if updated else ts
+                        # Timestamps
+                        create_ts = video_data.get('createTime') or video_data.get('create_time')
+                        if create_ts:
+                            ts = datetime.fromtimestamp(create_ts, timezone.utc)
+                            fe.published(ts)
+                            fe.updated(ts)
+                            updated = max(ts, updated) if updated else ts
 
-                        # Title and basic link
-                        title = video.as_dict.get('desc', 'No Title')[:255]
-                        fe.title(title)
+                        # Title
+                        title = video_data.get('desc') or 'No Title'
+                        fe.title(title[:255])
                         fe.link(href=link)
 
-                        # Download video via TikTokApi
+                        # Download via TikTokApi
                         try:
-                            video_bytes = await api.video(id=video.id).bytes()
+                            video_bytes = await api.video(id=vid_id).bytes()
                             video_dir = Path("videos") / user
                             video_dir.mkdir(parents=True, exist_ok=True)
-                            video_path = video_dir / f"{video.id}.mp4"
+                            video_path = video_dir / f"{vid_id}.mp4"
                             with open(video_path, "wb") as f:
                                 f.write(video_bytes)
 
-                            public_url = ghRawURL + f"videos/{user}/{video.id}.mp4"
+                            public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
                             fe.enclosure(public_url, str(len(video_bytes)), "video/mp4")
                         except Exception as e:
-                            print(f"[WARN] TikTokApi download failed for {video.id}: {e}")
-                            # Fallback to the TikTok-hosted URL
+                            print(f"[WARN] TikTokApi download failed for {vid_id}: {e}")
                             fe.enclosure(link, "0", "video/mp4")
 
-                        # Create description with thumbnail
-                        desc_text = video.as_dict.get('desc', 'No Description')[:255]
-                        if video.as_dict['video'].get('cover'):
-                            cover_url = video.as_dict['video']['cover']
-                            parsed = urlparse(cover_url)
+                        # Thumbnail + description
+                        desc_text = title
+                        cover = video_data.get('video', {}).get('cover')
+                        if cover:
+                            parsed = urlparse(cover)
                             filename = Path(parsed.path).name
                             thumb_path = f'thumbnails/{user}/screenshot_{filename}.jpg'
                             full_thumb = Path(__file__).parent / thumb_path
                             if not full_thumb.exists():
                                 async with async_playwright() as pw:
-                                    await runscreenshot(pw, cover_url, str(full_thumb))
+                                    await runscreenshot(pw, cover, str(full_thumb))
                             thumb_url = ghRawURL + thumb_path
                             content = f'<img src="{thumb_url}" /> {desc_text}'
                         else:
                             content = desc_text
-
                         fe.content(content)
 
-                    # Write feed after processing all videos
+                    # Write out the feed
                     if updated:
                         fg.updated(updated)
                     fg.rss_file(f'rss/{user}.xml', pretty=True)
