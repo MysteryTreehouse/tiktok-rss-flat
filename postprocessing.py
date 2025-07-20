@@ -10,7 +10,6 @@ from playwright.async_api import async_playwright
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Your GitHub‐raw base URL and MS_TOKEN
 ghRawURL = config.ghRawURL
 ms_token = os.environ.get("MS_TOKEN")
 force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
@@ -21,6 +20,22 @@ async def runscreenshot(playwright, url, screenshotpath):
     await page.goto(url)
     await page.screenshot(path=screenshotpath, quality=20, type='jpeg')
     await browser.close()
+
+def find_any_url(obj):
+    """Recursively find the first HTTP(s) URL in a nested dict/list."""
+    if isinstance(obj, str) and obj.startswith("http"):
+        return obj
+    if isinstance(obj, dict):
+        for v in obj.values():
+            u = find_any_url(v)
+            if u:
+                return u
+    if isinstance(obj, list):
+        for v in obj:
+            u = find_any_url(v)
+            if u:
+                return u
+    return None
 
 async def user_videos():
     with open('subscriptions.csv') as f:
@@ -41,14 +56,19 @@ async def user_videos():
 
             updated = None
             async with TikTokApi() as api:
-                # headful session
-                await api.create_sessions(ms_tokens=[ms_token], num_sessions=1, sleep_after=3, headless=False)
+                await api.create_sessions(
+                    ms_tokens=[ms_token],
+                    num_sessions=1,
+                    sleep_after=3,
+                    headless=False
+                )
+
                 ttuser = api.user(user)
                 try:
                     await ttuser.info()
                     count = 1 if force_last else 10
                     async for video in ttuser.videos(count=count):
-                        # Grab metadata dict safely
+                        # safe metadata
                         try:
                             video_data = video.dict()
                         except:
@@ -72,23 +92,27 @@ async def user_videos():
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # attempt Playwright download
+                        # try downloading via API
                         video_bytes = None
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
                         except Exception:
-                            # HTTP fallback: look for downloadAddr or playAddr
-                            dl = (
-                                video_data.get('downloadAddr')
-                                or video_data.get('download_addr')
-                                or video_data.get('video', {}).get('downloadAddr')
-                                or video_data.get('video', {}).get('download_addr')
-                                or video_data.get('video', {}).get('playAddr')
-                                or video_data.get('video', {}).get('play_addr')
+                            # explicit-field fallback
+                            candidate = (
+                                video_data.get('downloadAddr') or
+                                video_data.get('download_addr') or
+                                video_data.get('video', {}).get('downloadAddr') or
+                                video_data.get('video', {}).get('download_addr') or
+                                video_data.get('video', {}).get('playAddr') or
+                                video_data.get('video', {}).get('play_addr')
                             )
-                            if dl:
+                            # recursive fallback
+                            if not candidate:
+                                candidate = find_any_url(video_data)
+
+                            if candidate:
                                 try:
-                                    resp = requests.get(dl, timeout=20)
+                                    resp = requests.get(candidate, timeout=20)
                                     resp.raise_for_status()
                                     video_bytes = resp.content
                                 except Exception as e:
@@ -98,9 +122,9 @@ async def user_videos():
 
                         # write file + enclosure
                         if video_bytes:
-                            out_dir = Path("videos")/user
+                            out_dir = Path("videos") / user
                             out_dir.mkdir(parents=True, exist_ok=True)
-                            path = out_dir/f"{vid_id}.mp4"
+                            path = out_dir / f"{vid_id}.mp4"
                             with open(path, "wb") as wf:
                                 wf.write(video_bytes)
                             public = ghRawURL + f"videos/{user}/{vid_id}.mp4"
@@ -108,12 +132,12 @@ async def user_videos():
                         else:
                             fe.enclosure(link, "0", "video/mp4")
 
-                        # thumbnail & description
+                        # thumbnail + content
                         desc = title
                         cover = video_data.get('video', {}).get('cover')
                         if cover:
-                            name = Path(urlparse(cover).path).name
-                            thumb_rel = f"thumbnails/{user}/screenshot_{name}.jpg"
+                            thumb_name = Path(urlparse(cover).path).name
+                            thumb_rel = f"thumbnails/{user}/screenshot_{thumb_name}.jpg"
                             thumb_abs = Path(thumb_rel)
                             if not thumb_abs.exists():
                                 async with async_playwright() as pw:
