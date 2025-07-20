@@ -8,11 +8,14 @@ import config
 from playwright.async_api import async_playwright, Playwright
 from pathlib import Path
 from urllib.parse import urlparse
-import requests  # ← make sure this import is here
+import requests  # for HTTP fallback
 
 # Edit config.py to change your URLs
 ghRawURL = config.ghRawURL
 ms_token = os.environ.get("MS_TOKEN")
+
+# if you set FORCE_LAST_REFRESH=1, the latest video will always look new
+FORCE_LAST_REFRESH = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
 async def runscreenshot(playwright: Playwright, url, screenshotpath):
     browser = await playwright.chromium.launch()
@@ -44,7 +47,7 @@ async def user_videos():
                 ttuser = api.user(user)
                 try:
                     await ttuser.info()
-                    async for video in ttuser.videos(count=10):
+                    async for idx, video in enumerate(ttuser.videos(count=10)):
                         # Safely convert Video model to dict
                         try:
                             video_data = video.dict()
@@ -54,14 +57,23 @@ async def user_videos():
                         fe = fg.add_entry()
                         vid_id = getattr(video, 'id', video_data.get('id'))
                         link = f'https://tiktok.com/@{user}/video/{vid_id}'
-                        fe.id(link)
+
+                        # hijack the GUID on the very first item in test mode
+                        if FORCE_LAST_REFRESH and idx == 0:
+                            stamp = int(datetime.now(tz=timezone.utc).timestamp())
+                            fe.id(f"{link}?refresh={stamp}")
+                            fe.updated(datetime.now(tz=timezone.utc))
+                        else:
+                            fe.id(link)
 
                         # Timestamps
                         create_ts = video_data.get('createTime') or video_data.get('create_time')
                         if create_ts:
                             ts = datetime.fromtimestamp(create_ts, timezone.utc)
                             fe.published(ts)
-                            fe.updated(ts)
+                            # only bump updated if not already done by FORCE_LAST_REFRESH
+                            if not (FORCE_LAST_REFRESH and idx == 0):
+                                fe.updated(ts)
                             updated = max(ts, updated) if updated else ts
 
                         # Title
@@ -69,45 +81,23 @@ async def user_videos():
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # ─────── DOWNLOAD VIA HTTP FALLBACK ───────
-                        video_url = video_data.get('video', {}).get('downloadAddr')
-                        if video_url:
-                            # HEAD for size (optional)
-                            try:
-                                head = requests.head(video_url, allow_redirects=True, timeout=10)
-                                size = head.headers.get('Content-Length', '0')
-                            except:
-                                size = '0'
+                        # Download via TikTokApi
+                        try:
+                            video_bytes = await api.video(id=vid_id).bytes()
+                            video_dir = Path("videos") / user
+                            video_dir.mkdir(parents=True, exist_ok=True)
+                            video_path = video_dir / f"{vid_id}.mp4"
+                            with open(video_path, "wb") as vf:
+                                vf.write(video_bytes)
 
-                            # GET + write out
-                            try:
-                                resp = requests.get(
-                                    video_url,
-                                    headers={"Range": "bytes=0-", "Referer": "https://www.tiktok.com"},
-                                    cookies={"msToken": ms_token},
-                                    stream=True,
-                                    timeout=60
-                                )
-                                resp.raise_for_status()
-                                video_dir = Path("videos") / user
-                                video_dir.mkdir(parents=True, exist_ok=True)
-                                video_path = video_dir / f"{vid_id}.mp4"
-                                with open(video_path, "wb") as fp:
-                                    for chunk in resp.iter_content(8192):
-                                        fp.write(chunk)
-
-                                public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
-                                fe.enclosure(public_url, size, "video/mp4")
-
-                            except Exception as e:
-                                print(f"[WARN] HTTP download failed for {vid_id}: {e}")
-                                # fallback to upstream TikTok URL (won't self-host)
-                                fe.enclosure(video_url, size, "video/mp4")
-                        else:
-                            # no download URL—just point at the page
+                            public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
+                            fe.enclosure(public_url, str(len(video_bytes)), "video/mp4")
+                        except Exception as e:
+                            print(f"[WARN] TikTokApi .bytes() failed for {vid_id}: {e}")
+                            # fallback to linking upstream
                             fe.enclosure(link, "0", "video/mp4")
 
-                        # ─────── THUMBNAIL + DESCRIPTION ───────
+                        # Thumbnail + description
                         desc_text = title
                         cover = video_data.get('video', {}).get('cover')
                         if cover:
@@ -119,11 +109,12 @@ async def user_videos():
                                 async with async_playwright() as pw:
                                     await runscreenshot(pw, cover, str(full_thumb))
                             thumb_url = ghRawURL + thumb_path
-                            fe.content(f'<img src="{thumb_url}" /> {desc_text}')
+                            content = f'<img src="{thumb_url}" /> {desc_text}'
                         else:
-                            fe.content(desc_text)
+                            content = desc_text
+                        fe.content(content)
 
-                    # write out the feed
+                    # Write out the feed
                     if updated:
                         fg.updated(updated)
                     fg.rss_file(f'rss/{user}.xml', pretty=True)
