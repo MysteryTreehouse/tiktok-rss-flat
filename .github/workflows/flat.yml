@@ -1,3 +1,4 @@
+# flat.yml
 name: Flat
 
 on:
@@ -23,9 +24,14 @@ jobs:
           python-version: 3.12
 
       - name: execute py script
+        # inject your TikTok API & BrightData creds here
         env:
-          MS_TOKEN: ${{ secrets.MS_TOKEN }}
-          FORCE_LAST_REFRESH: '1'
+          MS_TOKEN:            ${{ secrets.MS_TOKEN }}
+          FORCE_LAST_REFRESH:  '1'
+          BRIGHTDATA_USERNAME: ${{ secrets.BRIGHTDATA_USERNAME }}
+          BRIGHTDATA_PASSWORD: ${{ secrets.BRIGHTDATA_PASSWORD }}
+          # BrightData rotating residential proxy endpoint:
+          TIKTOK_PROXY:       "http://${{ secrets.BRIGHTDATA_USERNAME }}:${{ secrets.BRIGHTDATA_PASSWORD }}@brd.superproxy.io:33335"
         run: |
           export DISPLAY=:99
           sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
@@ -47,7 +53,7 @@ jobs:
           # then fetch the browsers themselves
           python -m playwright install
 
-          # run your feed generator
+          # run your feed generator (it will read $TIKTOK_PROXY automatically)
           python postprocessing.py
 
           # commit & push any new feeds/videos
