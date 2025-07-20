@@ -10,7 +10,9 @@ on:
 
 jobs:
   scheduled:
-    runs-on: ubuntu-latest
+    # Use Ubuntu 22.04 to match Playwright's expected package versions
+    runs-on: ubuntu-22.04
+
     steps:
       - name: checkout repo content
         uses: actions/checkout@v3
@@ -36,17 +38,21 @@ jobs:
           pip install playwright==1.40.0
           pip install -r requirements.txt
 
-          # install OS-level deps that Playwright browsers need
+          # make sure apt has up-to-date package lists
+          sudo apt-get update
+
+          # install all OS-level deps Playwright needs (GStreamer, libsoup, etc)
           python -m playwright install-deps
 
-          # then download the browsers themselves
+          # then fetch the browsers themselves
           python -m playwright install
 
-          # finally run your feed generator
+          # run your feed generator
           python postprocessing.py
 
+          # commit & push any new feeds/videos
           git config user.name github-actions
-          git config user.email github-actions@github-actions.github.com
+          git config user.email github-actions@github.com
           git add .
           git commit --allow-empty -m "Latest TikTok RSS"
           git push
