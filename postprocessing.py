@@ -8,6 +8,7 @@ import config
 from playwright.async_api import async_playwright, Playwright
 from pathlib import Path
 from urllib.parse import urlparse
+import requests  # for HTTP fallback download
 
 # Edit config.py to change your URLs
 ghRawURL = config.ghRawURL
@@ -44,18 +45,18 @@ async def user_videos():
                 try:
                     await ttuser.info()
                     async for video in ttuser.videos(count=10):
-                        # Safely convert Video model to dict
+                        # Convert video model to dict where possible
                         try:
                             video_data = video.dict()
                         except:
                             video_data = {}
 
                         fe = fg.add_entry()
-                        vid_id = video.id if hasattr(video, 'id') else video_data.get('id')
+                        vid_id = getattr(video, 'id', video_data.get('id'))
                         link = f'https://tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
-                        # Timestamps
+                        # Timestamp
                         create_ts = video_data.get('createTime') or video_data.get('create_time')
                         if create_ts:
                             ts = datetime.fromtimestamp(create_ts, timezone.utc)
@@ -63,25 +64,55 @@ async def user_videos():
                             fe.updated(ts)
                             updated = max(ts, updated) if updated else ts
 
-                        # Title
-                        title = video_data.get('desc') or 'No Title'
-                        fe.title(title[:255])
+                        # Title and link
+                        title = video_data.get('desc', 'No Title')[:255]
+                        fe.title(title)
                         fe.link(href=link)
 
-                        # Download via TikTokApi
+                        # Try TikTokApi download
+                        downloaded = False
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
-                            video_dir = Path("videos") / user
+                            video_dir = Path('videos') / user
                             video_dir.mkdir(parents=True, exist_ok=True)
                             video_path = video_dir / f"{vid_id}.mp4"
-                            with open(video_path, "wb") as f:
-                                f.write(video_bytes)
-
+                            with open(video_path, 'wb') as f_out:
+                                f_out.write(video_bytes)
                             public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
-                            fe.enclosure(public_url, str(len(video_bytes)), "video/mp4")
+                            fe.enclosure(public_url, str(len(video_bytes)), 'video/mp4')
+                            downloaded = True
                         except Exception as e:
-                            print(f"[WARN] TikTokApi download failed for {vid_id}: {e}")
-                            fe.enclosure(link, "0", "video/mp4")
+                            print(f"[WARN] TikTokApi .bytes() failed for {vid_id}: {e}")
+
+                        # Fallback HTTP download if needed
+                        if not downloaded:
+                            video_url = video_data.get('video', {}).get('downloadAddr')
+                            if video_url:
+                                try:
+                                    head = requests.head(video_url, allow_redirects=True)
+                                    size = head.headers.get('Content-Length', '0')
+                                except Exception:
+                                    size = '0'
+                                try:
+                                    resp = requests.get(
+                                        video_url,
+                                        headers={'Range': 'bytes=0-', 'Referer': 'https://www.tiktok.com'},
+                                        cookies={'msToken': ms_token},
+                                        stream=True,
+                                        timeout=60
+                                    )
+                                    resp.raise_for_status()
+                                    video_dir = Path('videos') / user
+                                    video_dir.mkdir(parents=True, exist_ok=True)
+                                    video_path = video_dir / f"{vid_id}.mp4"
+                                    with open(video_path, 'wb') as f_out:
+                                        for chunk in resp.iter_content(8192):
+                                            f_out.write(chunk)
+                                    public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
+                                    fe.enclosure(public_url, resp.headers.get('Content-Length', size), 'video/mp4')
+                                except Exception as e:
+                                    print(f"[WARN] HTTP fallback failed for {vid_id}: {e}")
+                                    fe.enclosure(link, '0', 'video/mp4')
 
                         # Thumbnail + description
                         desc_text = title
@@ -100,11 +131,10 @@ async def user_videos():
                             content = desc_text
                         fe.content(content)
 
-                    # Write out the feed
+                    # Write feed
                     if updated:
                         fg.updated(updated)
                     fg.rss_file(f'rss/{user}.xml', pretty=True)
-
                 except Exception as e:
                     print(f"Error for user {user}: {e}")
 
