@@ -1,43 +1,73 @@
+#!/usr/bin/env python3
+"""
+Fetches the latest TikTok videos for a given user and generates an RSS feed.
+"""
 import os
 import asyncio
 from TikTokApi import TikTokApi
 from feedgen.feed import FeedGenerator
 
-def find_any_url(video_data: dict) -> str:
-    # existing logic to select the best available URL
-    for key in ("playAddr", "downloadAddr", "shareCoverUrl", "coverUrl"):
-        url = video_data.get(key)
+# Environment configuration
+MS_TOKEN = os.getenv("MS_TOKEN")
+FORCE_REFRESH = os.getenv("FORCE_LAST_REFRESH") == "1"
+TIKTOK_USER = os.getenv("TIKTOK_USER", "treehousedetective")
+TIKTOK_BROWSER = os.getenv("TIKTOK_BROWSER", "chromium")  # or 'firefox', 'webkit'
+OUTPUT_FILE = os.getenv("OUTPUT_FILE", "rss.xml")
+MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
+
+async def user_videos() -> list[dict]:
+    """
+    Uses the TikTokApi to fetch the latest videos of the configured user.
+    """
+    async with TikTokApi() as api:
+        # Establish a browsing session with your TikTok ms_token
+        await api.create_sessions(
+            ms_tokens=[MS_TOKEN],      # pass your ms_token here
+            num_sessions=1,
+            browser=TIKTOK_BROWSER,
+            use_test_endpoints=FORCE_REFRESH
+        )
+        # Fetch user videos (async iterator)
+        videos = []
+        async for video in api.user(username=TIKTOK_USER).videos(count=MAX_VIDEOS):
+            # Convert video object to dict
+            if hasattr(video, "dict"):  # pydantic-style
+                vid_data = video.dict()
+            elif hasattr(video, "as_dict"):  # legacy
+                vid_data = video.as_dict
+            else:
+                vid_data = video.__dict__
+            videos.append(vid_data)
+        return videos
+
+
+def build_rss(videos: list[dict]) -> None:
+    """
+    Builds and writes an RSS feed from a list of video dicts.
+    """
+    fg = FeedGenerator()
+    fg.title(f"@{TIKTOK_USER} TikTok Feed")
+    fg.link(href=f"https://www.tiktok.com/@{TIKTOK_USER}", rel="alternate")
+    fg.description(f"Latest TikTok videos from @{TIKTOK_USER}")
+
+    for vid in videos:
+        fe = fg.add_entry()
+        fe.id(vid.get("id"))
+        title = vid.get("desc") or vid.get("id")
+        fe.title(title[:60] + ("..." if len(title) > 60 else ""))
+        # video URL may be nested under 'video' -> 'playAddr'
+        url = vid.get("video", {}).get("playAddr") or vid.get("downloadAddr")
         if url:
-            return url
-    return None
+            fe.link(href=url)
+        # convert timestamp to RFC822 string if needed
+        create_time = vid.get("createTime")
+        if create_time:
+            fe.pubDate(create_time)
 
-async def user_videos():
-    token = os.environ.get("MS_TOKEN")
-    force_refresh = bool(os.environ.get("FORCE_LAST_REFRESH"))
-    async with TikTokApi(custom_verifyFp=token, use_test_endpoints=force_refresh) as api:
-        # fetch user videos, possibly forcing re-import if enabled
-        videos = await api.user_videos(user="treehousedetective")
-        fg = FeedGenerator()
-        fg.title("TikTok RSS")
-        fg.link(href="https://www.tiktok.com/@treehousedetective", rel="alternate")
-        fg.description("Latest uploads from treehousedetective")
+    fg.rss_file(OUTPUT_FILE)
+    print(f"Generated RSS feed with {len(videos)} videos -> {OUTPUT_FILE}")
 
-        for video in videos:
-            # Corrected call: use as_dict(), not as.dict()
-            video_data = video.as_dict()
-            url = find_any_url(video_data)
-            if not url:
-                print(f"[WARN] No video URL found for {video_data.get('id')}")
-                continue
-            entry = fg.add_entry()
-            entry.id(str(video_data.get('id')))
-            entry.title(video_data.get('desc', ''))
-            entry.link(href=url)
-            entry.pubDate(video_data.get('createTime'))
 
-        rss = fg.rss_str(pretty=True)
-        with open("feed.xml", "wb") as f:
-            f.write(rss)
-
-if __name__ == '__main__':
-    asyncio.run(user_videos())
+if __name__ == "__main__":
+    videos = asyncio.run(user_videos())
+    build_rss(videos)
