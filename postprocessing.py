@@ -1,6 +1,7 @@
 import os
 import asyncio
 import csv
+import requests
 from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
 from TikTokApi import TikTokApi
@@ -14,8 +15,7 @@ ghRawURL = config.ghRawURL
 ms_token = os.environ.get("MS_TOKEN")
 
 async def runscreenshot(playwright: Playwright, url, screenshotpath):
-    # Use Chromium in non-headless mode (Ubuntu runners have all deps for Chromium)
-    browser = await playwright.chromium.launch(headless=False)
+    browser = await playwright.chromium.launch()
     page = await browser.new_page()
     await page.goto(url)
     await page.screenshot(path=screenshotpath, quality=20, type='jpeg')
@@ -40,7 +40,6 @@ async def user_videos():
 
             updated = None
             async with TikTokApi() as api:
-                # Launch Chromium in non-headless to avoid detection
                 await api.create_sessions(
                     ms_tokens=[ms_token],
                     num_sessions=1,
@@ -50,16 +49,8 @@ async def user_videos():
                 ttuser = api.user(user)
                 try:
                     await ttuser.info()
-
-                    # FORCE_LAST_REFRESH: only fetch the very latest video when set
-                    force = os.getenv("FORCE_LAST_REFRESH") == "1"
-                    vids = []
-                    async for v in ttuser.videos(count=10):
-                        vids.append(v)
-                        if force:
-                            break
-
-                    for video in vids:
+                    async for video in ttuser.videos(count=10):
+                        # Safely convert Video model to dict
                         try:
                             video_data = video.dict()
                         except:
@@ -83,19 +74,35 @@ async def user_videos():
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # Download via TikTokApi
+                        # --- Download via TikTokApi with HTTP fallback ---
+                        video_dir = Path("videos") / user
+                        video_dir.mkdir(parents=True, exist_ok=True)
+                        video_path = video_dir / f"{vid_id}.mp4"
+                        video_bytes = None
+
+                        # 1) Try the built-in async download
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
-                            video_dir = Path("videos") / user
-                            video_dir.mkdir(parents=True, exist_ok=True)
-                            video_path = video_dir / f"{vid_id}.mp4"
+                        except Exception as e:
+                            print(f"[WARN] TikTokApi .bytes() failed for {vid_id}: {e}")
+                            # 2) Fallback: fetch the direct download URL via requests
+                            download_url = video_data.get("downloadAddr") or video_data.get("download_addr")
+                            if download_url:
+                                try:
+                                    resp = requests.get(download_url, timeout=20)
+                                    resp.raise_for_status()
+                                    video_bytes = resp.content
+                                    print(f"[INFO] HTTP download fallback succeeded for {vid_id}")
+                                except Exception as e2:
+                                    print(f"[ERROR] HTTP fallback failed for {vid_id}: {e2}")
+
+                        # 3) Write file & add enclosure, or fall back to page link
+                        if video_bytes:
                             with open(video_path, "wb") as f:
                                 f.write(video_bytes)
-
                             public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
                             fe.enclosure(public_url, str(len(video_bytes)), "video/mp4")
-                        except Exception as e:
-                            print(f"[WARN] TikTokApi download failed for {vid_id}: {e}")
+                        else:
                             fe.enclosure(link, "0", "video/mp4")
 
                         # Thumbnail + description
