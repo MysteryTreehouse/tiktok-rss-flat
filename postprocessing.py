@@ -65,9 +65,8 @@ async def user_videos():
 
             updated = None
 
-            # **no args** here; we pass ms_token into create_sessions() below
+            # open TikTokApi session (no args here)
             async with TikTokApi() as api:
-                # create exactly one session, supplying your ms_token
                 await api.create_sessions(
                     ms_tokens=[ms_token],
                     num_sessions=1,
@@ -77,7 +76,6 @@ async def user_videos():
 
                 ttuser = api.user(user)
                 try:
-                    # confirm user exists
                     await ttuser.info()
                     count = 1 if force_last else 10
 
@@ -93,11 +91,11 @@ async def user_videos():
                         link = f'https://www.tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
-                        # **timestamps** — handle both int epochs and datetime objects
+                        # timestamps — handle int epochs *and* both naive/aware datetimes
                         ts_val = video_data.get('createTime') or video_data.get('create_time')
                         if ts_val:
                             if isinstance(ts_val, datetime):
-                                ts = ts_val
+                                ts = ts_val if ts_val.tzinfo else ts_val.replace(tzinfo=timezone.utc)
                             else:
                                 ts = datetime.fromtimestamp(int(ts_val), timezone.utc)
                             fe.published(ts)
