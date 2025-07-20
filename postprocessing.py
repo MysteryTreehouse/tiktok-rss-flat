@@ -93,10 +93,13 @@ async def user_videos():
                         link = f'https://www.tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
-                        # timestamps
+                        # **timestamps** — handle both int epochs and datetime objects
                         ts_val = video_data.get('createTime') or video_data.get('create_time')
                         if ts_val:
-                            ts = datetime.fromtimestamp(ts_val, timezone.utc)
+                            if isinstance(ts_val, datetime):
+                                ts = ts_val
+                            else:
+                                ts = datetime.fromtimestamp(int(ts_val), timezone.utc)
                             fe.published(ts)
                             fe.updated(ts)
                             updated = max(updated, ts) if updated else ts
