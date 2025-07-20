@@ -4,7 +4,7 @@ import csv
 import requests
 from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
-from TikTokApi import TikTokApi, EmptyResponseException
+from TikTokApi import TikTokApi
 import config
 from playwright.async_api import async_playwright
 from pathlib import Path
@@ -13,11 +13,11 @@ from urllib.parse import urlparse
 # GitHub raw base URL for assets
 ghRawURL = config.ghRawURL
 
-# your TikTok msToken and force refresh flag
+# TikTok msToken and force-refresh flag
 ms_token = os.environ.get("MS_TOKEN")
 force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
-# optional proxy support via environment
+# Optional proxy support via environment
 proxy_url = os.environ.get("TIKTOK_PROXY")
 proxies_list = [proxy_url] if proxy_url else None
 
@@ -51,7 +51,7 @@ async def user_videos():
             user = row['username'].strip()
             print(f"Running for user '{user}'")
 
-            # set up the RSS feed
+            # Set up the RSS feed
             fg = FeedGenerator()
             fg.id(f'https://www.tiktok.com/@{user}')
             fg.title(f'{user} TikTok')
@@ -64,25 +64,22 @@ async def user_videos():
 
             updated = None
 
-            # open a TikTokApi session
             async with TikTokApi() as api:
                 try:
                     await api.create_sessions(
                         ms_tokens=[ms_token],
                         num_sessions=1,
                         sleep_after=3,
-                        headless=False,          # non-headless
-                        browser='webkit',        # use WebKit
-                        proxies=proxies_list     # optional proxy list
+                        headless=False,       # non-headless mode
+                        browser='webkit',     # use WebKit to evade bot detection
+                        proxies=proxies_list  # optional proxy list
                     )
 
                     ttuser = api.user(user)
-                    # ensure the user info loads (will throw if not)
                     await ttuser.info()
 
                     count = 1 if force_last else 10
                     async for video in ttuser.videos(count=count):
-                        # safe metadata
                         try:
                             video_data = video.dict()
                         except:
@@ -93,7 +90,6 @@ async def user_videos():
                         link = f'https://www.tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
-                        # timestamps
                         ts_val = video_data.get('createTime') or video_data.get('create_time')
                         if ts_val:
                             ts = datetime.fromtimestamp(ts_val, timezone.utc)
@@ -101,17 +97,14 @@ async def user_videos():
                             fe.updated(ts)
                             updated = max(updated, ts) if updated else ts
 
-                        # title + link
                         title = video_data.get('desc') or 'TikTok video'
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # try downloading via API
                         video_bytes = None
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
                         except Exception:
-                            # fallback to HTTP download
                             candidate = (
                                 video_data.get('downloadAddr')
                                 or video_data.get('download_addr')
@@ -131,7 +124,6 @@ async def user_videos():
                             else:
                                 print(f"[WARN] No video URL found for {vid_id}")
 
-                        # write file + enclosure
                         if video_bytes:
                             out_dir = Path("videos") / user
                             out_dir.mkdir(parents=True, exist_ok=True)
@@ -143,7 +135,6 @@ async def user_videos():
                         else:
                             fe.enclosure(link, "0", "video/mp4")
 
-                        # thumbnail + content
                         desc = title
                         cover = video_data.get('video', {}).get('cover')
                         if cover:
@@ -158,15 +149,16 @@ async def user_videos():
                         else:
                             fe.content(desc)
 
-                    # finalize feed
                     if updated:
                         fg.updated(updated)
                     fg.rss_file(f'rss/{user}.xml', pretty=True)
 
-                except EmptyResponseException as e:
-                    print(f"[ERROR] TikTok blocked us for {user}: {e}")
                 except Exception as e:
-                    print(f"[ERROR] Unexpected error for {user}: {e}")
+                    msg = str(e).lower()
+                    if 'empty response' in msg:
+                        print(f"[ERROR] TikTok blocked us for {user}: {e}")
+                    else:
+                        print(f"[ERROR] Unexpected error for {user}: {e}")
 
 if __name__ == '__main__':
     asyncio.run(user_videos())
