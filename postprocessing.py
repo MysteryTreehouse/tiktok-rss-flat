@@ -13,11 +13,13 @@ from urllib.parse import urlparse
 
 # GitHub raw base URL for assets and hosted videos
 ghRawURL = config.ghRawURL
+
 # your TikTok ms token must be set in env
 ms_token = os.environ.get("MS_TOKEN")
 if not ms_token:
     raise RuntimeError("MS_TOKEN environment variable is required")
-# whether to fetch only the last video
+
+# whether to fetch only the very last video (if set to "1")
 force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
 async def runscreenshot(playwright, url, screenshotpath):
@@ -62,10 +64,12 @@ async def user_videos():
             fg.language('en')
 
             updated = None
-            # open API client with your ms_token
-            async with TikTokApi(ms_tokens=[ms_token]) as api:
-                # create exactly one browser session
+
+            # **no args** here; we pass ms_token into create_sessions() below
+            async with TikTokApi() as api:
+                # create exactly one session, supplying your ms_token
                 await api.create_sessions(
+                    ms_tokens=[ms_token],
                     num_sessions=1,
                     sleep_after=3,
                     headless=False
@@ -73,20 +77,18 @@ async def user_videos():
 
                 ttuser = api.user(user)
                 try:
-                    # load user info (to confirm user exists)
+                    # confirm user exists
                     await ttuser.info()
                     count = 1 if force_last else 10
 
-                    # iterate videos
                     async for video in ttuser.videos(count=count):
-                        # safe metadata coercion
+                        # safe metadata
                         try:
                             video_data = video.dict()
                         except AttributeError:
                             video_data = getattr(video, "__dict__", {}) or {}
 
                         fe = fg.add_entry()
-                        # entry ID & link
                         vid_id = video_data.get('id') or getattr(video, 'id', None)
                         link = f'https://www.tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
@@ -99,17 +101,17 @@ async def user_videos():
                             fe.updated(ts)
                             updated = max(updated, ts) if updated else ts
 
-                        # title and link
+                        # title + link
                         title = video_data.get('desc') or 'TikTok video'
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # attempt download via API
+                        # try downloading via API
                         video_bytes = None
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
                         except Exception:
-                            # explicit-field fallback
+                            # fallback to any available URL
                             candidate = (
                                 video_data.get('downloadAddr')
                                 or video_data.get('download_addr')
@@ -118,7 +120,6 @@ async def user_videos():
                                 or video_data.get('video', {}).get('playAddr')
                                 or video_data.get('video', {}).get('play_addr')
                             )
-                            # recursive fallback
                             if not candidate:
                                 candidate = find_any_url(video_data)
 
@@ -132,7 +133,7 @@ async def user_videos():
                             else:
                                 print(f"[WARN] No video URL found for {vid_id}")
 
-                        # save file + enclosure
+                        # save video + enclosure
                         if video_bytes:
                             out_dir = Path("videos") / user
                             out_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +145,7 @@ async def user_videos():
                         else:
                             fe.enclosure(link, "0", "video/mp4")
 
-                        # thumbnail & content HTML
+                        # thumbnail + content
                         desc = title
                         cover = video_data.get('video', {}).get('cover')
                         if cover:
@@ -159,7 +160,7 @@ async def user_videos():
                         else:
                             fe.content(desc)
 
-                    # finalize feed file
+                    # finalize feed
                     if updated:
                         fg.updated(updated)
                     fg.rss_file(f'rss/{user}.xml', pretty=True)
