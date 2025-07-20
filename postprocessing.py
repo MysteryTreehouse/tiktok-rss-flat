@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 # Edit config.py to change your URLs
 ghRawURL = config.ghRawURL
 ms_token = os.environ.get("MS_TOKEN")
+# If you ever need to force a full re-import of the last video for testing:
+force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
 async def runscreenshot(playwright: Playwright, url, screenshotpath):
     browser = await playwright.chromium.launch()
@@ -40,25 +42,24 @@ async def user_videos():
 
             updated = None
             async with TikTokApi() as api:
-                await api.create_sessions(
-                    ms_tokens=[ms_token],
-                    num_sessions=1,
-                    sleep_after=3,
-                    headless=False
-                )
+                # create a Playwright session (headful) so TikTok doesn't block us
+                await api.create_sessions(ms_tokens=[ms_token], num_sessions=1, sleep_after=3, headless=False)
                 ttuser = api.user(user)
                 try:
                     await ttuser.info()
-                    async for video in ttuser.videos(count=10):
-                        # Safely convert Video model to dict
+                    # if forcing, only grab the very latest one:
+                    count = 1 if force_last else 10
+                    async for video in ttuser.videos(count=count):
+                        # Always convert to dict for metadata
+                        video_data = {}
                         try:
                             video_data = video.dict()
-                        except:
-                            video_data = {}
+                        except Exception:
+                            pass
 
                         fe = fg.add_entry()
-                        vid_id = getattr(video, 'id', None) or video_data.get('id')
-                        link = f'https://tiktok.com/@{user}/video/{vid_id}'
+                        vid_id = getattr(video, 'id', video_data.get('id'))
+                        link = f'https://www.tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
                         # Timestamps
@@ -74,37 +75,35 @@ async def user_videos():
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # Download via TikTokApi or HTTP fallback
-                        video_dir = Path("videos") / user
-                        video_dir.mkdir(parents=True, exist_ok=True)
-                        video_path = video_dir / f"{vid_id}.mp4"
+                        # Try the Playwright download first
+                        video_bytes = None
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
                         except Exception as e:
-                            print(f"[WARN] TikTokApi download failed for {vid_id}: {e}")
-                            # Fallback: use direct download URL
-                            download_url = (
-                                video_data.get('video', {}).get('downloadAddr')
-                                or video_data.get('video', {}).get('download_addr')
-                            )
-                            if download_url:
+                            # fallback to HTTP-download from downloadAddr
+                            dl_url = video_data.get('downloadAddr') or video_data.get('download_addr')
+                            if dl_url:
                                 try:
-                                    resp = requests.get(download_url, timeout=30)
+                                    resp = requests.get(dl_url, timeout=15)
                                     resp.raise_for_status()
                                     video_bytes = resp.content
                                 except Exception as http_e:
                                     print(f"[WARN] HTTP fallback failed for {vid_id}: {http_e}")
-                                    fe.enclosure(link, "0", "video/mp4")
-                                    video_bytes = None
                             else:
-                                fe.enclosure(link, "0", "video/mp4")
-                                video_bytes = None
+                                print(f"[WARN] No downloadAddr for {vid_id}, cannot HTTP-download")
 
+                        # Write out the MP4 (or skip enclosure if no bytes)
                         if video_bytes:
+                            video_dir = Path("videos") / user
+                            video_dir.mkdir(parents=True, exist_ok=True)
+                            video_path = video_dir / f"{vid_id}.mp4"
                             with open(video_path, "wb") as vf:
                                 vf.write(video_bytes)
                             public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
                             fe.enclosure(public_url, str(len(video_bytes)), "video/mp4")
+                        else:
+                            # no bytes at all, just link to TikTok page
+                            fe.enclosure(link, "0", "video/mp4")
 
                         # Thumbnail + description
                         desc_text = title
