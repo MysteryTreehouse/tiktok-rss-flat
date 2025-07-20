@@ -1,8 +1,7 @@
 playwright==1.40.0
-asyncio
-feedgen
-TikTokApi
-config
+feedgen==1.0.0
+TikTokApi==7.1.0
+config==0.5.1
 requests>=2.28.0
 
 
