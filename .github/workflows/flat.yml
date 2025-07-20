@@ -27,16 +27,26 @@ jobs:
         run: |
           export DISPLAY=:99
           sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
+
           python3.12 -m venv venv
           source venv/bin/activate
           echo "VIRTUAL ENV:" $VIRTUAL_ENV
+
+          pip install --upgrade pip
           pip install playwright==1.40.0
           pip install -r requirements.txt
+
+          # install OS-level deps that Playwright browsers need
+          python -m playwright install-deps
+
+          # then download the browsers themselves
           python -m playwright install
-          # playwright install-deps
+
+          # finally run your feed generator
           python postprocessing.py
+
           git config user.name github-actions
-          git config user.email github-actions@github.com
+          git config user.email github-actions@github-actions.github.com
           git add .
           git commit --allow-empty -m "Latest TikTok RSS"
           git push
