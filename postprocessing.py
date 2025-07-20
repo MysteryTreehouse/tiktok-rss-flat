@@ -57,7 +57,7 @@ async def user_videos():
                             video_data = {}
 
                         fe = fg.add_entry()
-                        vid_id = video.id if hasattr(video, 'id') else video_data.get('id')
+                        vid_id = getattr(video, 'id', None) or video_data.get('id')
                         link = f'https://tiktok.com/@{user}/video/{vid_id}'
                         fe.id(link)
 
@@ -74,36 +74,37 @@ async def user_videos():
                         fe.title(title[:255])
                         fe.link(href=link)
 
-                        # --- Download via TikTokApi with HTTP fallback ---
+                        # Download via TikTokApi or HTTP fallback
                         video_dir = Path("videos") / user
                         video_dir.mkdir(parents=True, exist_ok=True)
                         video_path = video_dir / f"{vid_id}.mp4"
-                        video_bytes = None
-
-                        # 1) Try the built-in async download
                         try:
                             video_bytes = await api.video(id=vid_id).bytes()
                         except Exception as e:
-                            print(f"[WARN] TikTokApi .bytes() failed for {vid_id}: {e}")
-                            # 2) Fallback: fetch the direct download URL via requests
-                            download_url = video_data.get("downloadAddr") or video_data.get("download_addr")
+                            print(f"[WARN] TikTokApi download failed for {vid_id}: {e}")
+                            # Fallback: use direct download URL
+                            download_url = (
+                                video_data.get('video', {}).get('downloadAddr')
+                                or video_data.get('video', {}).get('download_addr')
+                            )
                             if download_url:
                                 try:
-                                    resp = requests.get(download_url, timeout=20)
+                                    resp = requests.get(download_url, timeout=30)
                                     resp.raise_for_status()
                                     video_bytes = resp.content
-                                    print(f"[INFO] HTTP download fallback succeeded for {vid_id}")
-                                except Exception as e2:
-                                    print(f"[ERROR] HTTP fallback failed for {vid_id}: {e2}")
+                                except Exception as http_e:
+                                    print(f"[WARN] HTTP fallback failed for {vid_id}: {http_e}")
+                                    fe.enclosure(link, "0", "video/mp4")
+                                    video_bytes = None
+                            else:
+                                fe.enclosure(link, "0", "video/mp4")
+                                video_bytes = None
 
-                        # 3) Write file & add enclosure, or fall back to page link
                         if video_bytes:
-                            with open(video_path, "wb") as f:
-                                f.write(video_bytes)
+                            with open(video_path, "wb") as vf:
+                                vf.write(video_bytes)
                             public_url = ghRawURL + f"videos/{user}/{vid_id}.mp4"
                             fe.enclosure(public_url, str(len(video_bytes)), "video/mp4")
-                        else:
-                            fe.enclosure(link, "0", "video/mp4")
 
                         # Thumbnail + description
                         desc_text = title
