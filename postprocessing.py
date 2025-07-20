@@ -14,7 +14,8 @@ ghRawURL = config.ghRawURL
 ms_token = os.environ.get("MS_TOKEN")
 
 async def runscreenshot(playwright: Playwright, url, screenshotpath):
-    browser = await playwright.webkit.launch(headless=False)  # use WebKit non-headless
+    # Use Chromium in non-headless mode (Ubuntu runners have all deps for Chromium)
+    browser = await playwright.chromium.launch(headless=False)
     page = await browser.new_page()
     await page.goto(url)
     await page.screenshot(path=screenshotpath, quality=20, type='jpeg')
@@ -39,27 +40,26 @@ async def user_videos():
 
             updated = None
             async with TikTokApi() as api:
-                # launch WebKit in non-headless mode to avoid bot detection
+                # Launch Chromium in non-headless to avoid detection
                 await api.create_sessions(
                     ms_tokens=[ms_token],
                     num_sessions=1,
                     sleep_after=3,
-                    headless=False,
-                    browser='webkit'
+                    headless=False
                 )
                 ttuser = api.user(user)
                 try:
                     await ttuser.info()
-                    # if FORCE_LAST_REFRESH is set, only pull the very latest video
+
+                    # FORCE_LAST_REFRESH: only fetch the very latest video when set
                     force = os.getenv("FORCE_LAST_REFRESH") == "1"
                     vids = []
                     async for v in ttuser.videos(count=10):
                         vids.append(v)
                         if force:
-                            break   # stop after the first (most recent) video
+                            break
 
                     for video in vids:
-                        # Safely convert Video model to dict
                         try:
                             video_data = video.dict()
                         except:
