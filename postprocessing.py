@@ -1,73 +1,171 @@
 #!/usr/bin/env python3
-"""
-Fetches the latest TikTok videos for a given user and generates an RSS feed.
-"""
 import os
 import asyncio
-from TikTokApi import TikTokApi
+import csv
+import requests
+from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
+from TikTokApi import TikTokApi
+import config
+from playwright.async_api import async_playwright
+from pathlib import Path
+from urllib.parse import urlparse
 
-# Environment configuration
-MS_TOKEN = os.getenv("MS_TOKEN")
-FORCE_REFRESH = os.getenv("FORCE_LAST_REFRESH") == "1"
-TIKTOK_USER = os.getenv("TIKTOK_USER", "treehousedetective")
-TIKTOK_BROWSER = os.getenv("TIKTOK_BROWSER", "chromium")  # or 'firefox', 'webkit'
-OUTPUT_FILE = os.getenv("OUTPUT_FILE", "rss.xml")
-MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
+# GitHub raw base URL for assets and hosted videos
+ghRawURL = config.ghRawURL
+# your TikTok ms token must be set in env
+ms_token = os.environ.get("MS_TOKEN")
+if not ms_token:
+    raise RuntimeError("MS_TOKEN environment variable is required")
+# whether to fetch only the last video
+force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
-async def user_videos() -> list[dict]:
-    """
-    Uses the TikTokApi to fetch the latest videos of the configured user.
-    """
-    async with TikTokApi() as api:
-        # Establish a browsing session with your TikTok ms_token
-        await api.create_sessions(
-            ms_tokens=[MS_TOKEN],      # pass your ms_token here
-            num_sessions=1,
-            browser=TIKTOK_BROWSER,
-            use_test_endpoints=FORCE_REFRESH
-        )
-        # Fetch user videos (async iterator)
-        videos = []
-        async for video in api.user(username=TIKTOK_USER).videos(count=MAX_VIDEOS):
-            # Convert video object to dict
-            if hasattr(video, "dict"):  # pydantic-style
-                vid_data = video.dict()
-            elif hasattr(video, "as_dict"):  # legacy
-                vid_data = video.as_dict
-            else:
-                vid_data = video.__dict__
-            videos.append(vid_data)
-        return videos
+async def runscreenshot(playwright, url, screenshotpath):
+    browser = await playwright.chromium.launch()
+    page = await browser.new_page()
+    await page.goto(url)
+    await page.screenshot(path=screenshotpath, quality=20, type='jpeg')
+    await browser.close()
 
+def find_any_url(obj):
+    """Recursively find the first HTTP(s) URL in a nested dict/list."""
+    if isinstance(obj, str) and obj.startswith("http"):
+        return obj
+    if isinstance(obj, dict):
+        for v in obj.values():
+            u = find_any_url(v)
+            if u:
+                return u
+    if isinstance(obj, list):
+        for v in obj:
+            u = find_any_url(v)
+            if u:
+                return u
+    return None
 
-def build_rss(videos: list[dict]) -> None:
-    """
-    Builds and writes an RSS feed from a list of video dicts.
-    """
-    fg = FeedGenerator()
-    fg.title(f"@{TIKTOK_USER} TikTok Feed")
-    fg.link(href=f"https://www.tiktok.com/@{TIKTOK_USER}", rel="alternate")
-    fg.description(f"Latest TikTok videos from @{TIKTOK_USER}")
+async def user_videos():
+    with open('subscriptions.csv') as f:
+        reader = csv.DictReader(f, fieldnames=['username'])
+        for row in reader:
+            user = row['username'].strip()
+            print(f"Running for user '{user}'")
 
-    for vid in videos:
-        fe = fg.add_entry()
-        fe.id(vid.get("id"))
-        title = vid.get("desc") or vid.get("id")
-        fe.title(title[:60] + ("..." if len(title) > 60 else ""))
-        # video URL may be nested under 'video' -> 'playAddr'
-        url = vid.get("video", {}).get("playAddr") or vid.get("downloadAddr")
-        if url:
-            fe.link(href=url)
-        # convert timestamp to RFC822 string if needed
-        create_time = vid.get("createTime")
-        if create_time:
-            fe.pubDate(create_time)
+            # set up new RSS feed for this user
+            fg = FeedGenerator()
+            fg.id(f'https://www.tiktok.com/@{user}')
+            fg.title(f'{user} TikTok')
+            fg.author({'name': 'Conor ONeill', 'email': 'conor@conoroneill.com'})
+            fg.link(href='http://tiktok.com', rel='alternate')
+            fg.logo(ghRawURL + 'tiktok-rss.png')
+            fg.subtitle(f'All the latest TikToks from {user}')
+            fg.link(href=ghRawURL + f'rss/{user}.xml', rel='self')
+            fg.language('en')
 
-    fg.rss_file(OUTPUT_FILE)
-    print(f"Generated RSS feed with {len(videos)} videos -> {OUTPUT_FILE}")
+            updated = None
+            # open API client with your ms_token
+            async with TikTokApi(ms_tokens=[ms_token]) as api:
+                # create exactly one browser session
+                await api.create_sessions(
+                    num_sessions=1,
+                    sleep_after=3,
+                    headless=False
+                )
 
+                ttuser = api.user(user)
+                try:
+                    # load user info (to confirm user exists)
+                    await ttuser.info()
+                    count = 1 if force_last else 10
 
-if __name__ == "__main__":
-    videos = asyncio.run(user_videos())
-    build_rss(videos)
+                    # iterate videos
+                    async for video in ttuser.videos(count=count):
+                        # safe metadata coercion
+                        try:
+                            video_data = video.dict()
+                        except AttributeError:
+                            video_data = getattr(video, "__dict__", {}) or {}
+
+                        fe = fg.add_entry()
+                        # entry ID & link
+                        vid_id = video_data.get('id') or getattr(video, 'id', None)
+                        link = f'https://www.tiktok.com/@{user}/video/{vid_id}'
+                        fe.id(link)
+
+                        # timestamps
+                        ts_val = video_data.get('createTime') or video_data.get('create_time')
+                        if ts_val:
+                            ts = datetime.fromtimestamp(ts_val, timezone.utc)
+                            fe.published(ts)
+                            fe.updated(ts)
+                            updated = max(updated, ts) if updated else ts
+
+                        # title and link
+                        title = video_data.get('desc') or 'TikTok video'
+                        fe.title(title[:255])
+                        fe.link(href=link)
+
+                        # attempt download via API
+                        video_bytes = None
+                        try:
+                            video_bytes = await api.video(id=vid_id).bytes()
+                        except Exception:
+                            # explicit-field fallback
+                            candidate = (
+                                video_data.get('downloadAddr')
+                                or video_data.get('download_addr')
+                                or video_data.get('video', {}).get('downloadAddr')
+                                or video_data.get('video', {}).get('download_addr')
+                                or video_data.get('video', {}).get('playAddr')
+                                or video_data.get('video', {}).get('play_addr')
+                            )
+                            # recursive fallback
+                            if not candidate:
+                                candidate = find_any_url(video_data)
+
+                            if candidate:
+                                try:
+                                    resp = requests.get(candidate, timeout=20)
+                                    resp.raise_for_status()
+                                    video_bytes = resp.content
+                                except Exception as e:
+                                    print(f"[WARN] HTTP download failed for {vid_id}: {e}")
+                            else:
+                                print(f"[WARN] No video URL found for {vid_id}")
+
+                        # save file + enclosure
+                        if video_bytes:
+                            out_dir = Path("videos") / user
+                            out_dir.mkdir(parents=True, exist_ok=True)
+                            path = out_dir / f"{vid_id}.mp4"
+                            with open(path, "wb") as wf:
+                                wf.write(video_bytes)
+                            public = ghRawURL + f"videos/{user}/{vid_id}.mp4"
+                            fe.enclosure(public, str(len(video_bytes)), "video/mp4")
+                        else:
+                            fe.enclosure(link, "0", "video/mp4")
+
+                        # thumbnail & content HTML
+                        desc = title
+                        cover = video_data.get('video', {}).get('cover')
+                        if cover:
+                            thumb_name = Path(urlparse(cover).path).name
+                            thumb_rel = f"thumbnails/{user}/screenshot_{thumb_name}.jpg"
+                            thumb_abs = Path(thumb_rel)
+                            if not thumb_abs.exists():
+                                async with async_playwright() as pw:
+                                    await runscreenshot(pw, cover, str(thumb_abs))
+                            thumb_url = ghRawURL + thumb_rel
+                            fe.content(f'<img src="{thumb_url}" /> {desc}')
+                        else:
+                            fe.content(desc)
+
+                    # finalize feed file
+                    if updated:
+                        fg.updated(updated)
+                    fg.rss_file(f'rss/{user}.xml', pretty=True)
+
+                except Exception as e:
+                    print(f"Error for user {user}: {e}")
+
+if __name__ == '__main__':
+    asyncio.run(user_videos())
