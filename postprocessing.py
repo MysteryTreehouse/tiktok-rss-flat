@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 import os
 import asyncio
 import csv
 import requests
+import json
 from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
 from TikTokApi import TikTokApi
@@ -21,8 +23,10 @@ TikTokApi.__aexit__ = _noop_aexit  # avoid trying to close a missing browser
 ghRawURL     = config.ghRawURL
 ms_token     = os.environ.get("MS_TOKEN")
 force_last   = os.environ.get("FORCE_LAST_REFRESH") == "1"
-proxy_url    = os.environ.get("TIKTOK_PROXY")
-proxies_list = [proxy_url] if proxy_url else None
+
+# Parse optional proxy JSON from env
+proxy_str    = os.environ.get("TIKTOK_PROXY")
+proxies_list = [json.loads(proxy_str)] if proxy_str else None
 
 async def runscreenshot(playwright, url, screenshotpath):
     browser = await playwright.chromium.launch()
