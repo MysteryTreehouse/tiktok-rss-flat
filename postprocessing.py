@@ -25,7 +25,7 @@ ms_token   = os.environ.get("MS_TOKEN")
 force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
 # Parse optional proxy JSON from env
-proxy_str    = os.environ.get("TIKTOK_PROXY")
+proxy_str    = os.environ.get("PROXY")
 proxies_list = [json.loads(proxy_str)] if proxy_str else None
 
 async def runscreenshot(playwright, url, screenshotpath):
