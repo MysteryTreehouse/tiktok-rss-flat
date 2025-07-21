@@ -27,10 +27,7 @@ jobs:
         env:
           MS_TOKEN: ${{ secrets.MS_TOKEN }}
           FORCE_LAST_REFRESH: '1'
-          TIKTOK_PROXY: >-
-            {"server":"http://brd.superproxy.io:33335",
-             "username":"${{ secrets.BRIGHTDATA_USERNAME }}",
-             "password":"${{ secrets.BRIGHTDATA_PASSWORD }}"}
+          TIKTOK_PROXY: '{"server":"http://brd.superproxy.io:33335","username":"${{ secrets.BRIGHTDATA_USERNAME }}","password":"${{ secrets.BRIGHTDATA_PASSWORD }}"}'
         run: |
           export DISPLAY=:99
           sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
