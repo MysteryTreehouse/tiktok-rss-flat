@@ -1,4 +1,3 @@
-# flat.yml
 name: Flat
 
 on:
@@ -11,7 +10,6 @@ on:
 
 jobs:
   scheduled:
-    # Use Ubuntu 22.04 to match Playwright's expected package versions
     runs-on: ubuntu-22.04
 
     steps:
@@ -24,14 +22,15 @@ jobs:
           python-version: 3.12
 
       - name: execute py script
-        # inject your TikTok API & BrightData creds here
+        # bring in your MS_TOKEN, force-refresh flag,
+        # plus a JSON proxy object for BrightData
         env:
-          MS_TOKEN:            ${{ secrets.MS_TOKEN }}
-          FORCE_LAST_REFRESH:  '1'
-          BRIGHTDATA_USERNAME: ${{ secrets.BRIGHTDATA_USERNAME }}
-          BRIGHTDATA_PASSWORD: ${{ secrets.BRIGHTDATA_PASSWORD }}
-          # BrightData rotating residential proxy endpoint:
-          TIKTOK_PROXY:       "http://${{ secrets.BRIGHTDATA_USERNAME }}:${{ secrets.BRIGHTDATA_PASSWORD }}@brd.superproxy.io:33335"
+          MS_TOKEN: ${{ secrets.MS_TOKEN }}
+          FORCE_LAST_REFRESH: '1'
+          TIKTOK_PROXY: >-
+            {"server":"http://brd.superproxy.io:33335",
+             "username":"${{ secrets.BRIGHTDATA_USERNAME }}",
+             "password":"${{ secrets.BRIGHTDATA_PASSWORD }}"}
         run: |
           export DISPLAY=:99
           sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
@@ -44,19 +43,12 @@ jobs:
           pip install playwright==1.40.0
           pip install -r requirements.txt
 
-          # make sure apt has up-to-date package lists
           sudo apt-get update
-
-          # install all OS-level deps Playwright needs (GStreamer, libsoup, etc)
           python -m playwright install-deps
-
-          # then fetch the browsers themselves
           python -m playwright install
 
-          # run your feed generator (it will read $TIKTOK_PROXY automatically)
           python postprocessing.py
 
-          # commit & push any new feeds/videos
           git config user.name github-actions
           git config user.email github-actions@github.com
           git add .
