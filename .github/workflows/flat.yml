@@ -38,22 +38,24 @@ jobs:
           export DISPLAY=:99
           sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
 
+          # get into a clean virtualenv
           python3.12 -m venv venv
           source venv/bin/activate
-          echo "VIRTUAL ENV:" $VIRTUAL_ENV
 
-          # Update pip & install dependencies
+          echo "VIRTUAL ENV:" $VIRTUAL_ENV
           pip install --upgrade pip
           pip install playwright==1.40.0
           pip install -r requirements.txt
 
-          # ensure up-to-date CA bundle for Python
+          # bundle certificates for Python
           pip install --upgrade certifi
           export SSL_CERT_FILE=$(python -c "import certifi; print(certifi.where())")
           export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
 
-          # **Bypass Python TLS verification (temporary)**
+          # *** disable Python TLS verification (temporary) ***
           export PYTHONHTTPSVERIFY=0
+          # *** disable Node/Playwright TLS verification too ***
+          export NODE_TLS_REJECT_UNAUTHORIZED=0
 
           sudo apt-get update
           python -m playwright install-deps
