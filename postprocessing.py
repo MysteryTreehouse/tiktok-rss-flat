@@ -68,7 +68,7 @@ async def user_videos():
             fg.title(f'{user} TikTok')
             fg.author({'name':'Conor ONeill','email':'conor@conoroneill.com'})
             fg.link(href='http://tiktok.com', rel='alternate')
-            fg.logo(g hRawURL + 'tiktok-rss.png')
+            fg.logo(ghRawURL + 'tiktok-rss.png')
             fg.subtitle(f'All the latest TikToks from {user}')
             fg.link(href=ghRawURL + f'rss/{user}.xml', rel='self')
             fg.language('en')
