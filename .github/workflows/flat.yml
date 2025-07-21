@@ -42,13 +42,18 @@ jobs:
           source venv/bin/activate
           echo "VIRTUAL ENV:" $VIRTUAL_ENV
 
+          # Update pip & install dependencies
           pip install --upgrade pip
           pip install playwright==1.40.0
           pip install -r requirements.txt
+
           # ensure up-to-date CA bundle for Python
-          pip install certifi
+          pip install --upgrade certifi
           export SSL_CERT_FILE=$(python -c "import certifi; print(certifi.where())")
           export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
+
+          # **Bypass Python TLS verification (temporary)**
+          export PYTHONHTTPSVERIFY=0
 
           sudo apt-get update
           python -m playwright install-deps
