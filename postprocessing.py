@@ -20,16 +20,19 @@ TikTokApi.__aexit__ = _noop_aexit  # avoid trying to close a missing browser
 
 # ─── your config and helpers ────────────────────────────────────────────────────
 
-ghRawURL     = config.ghRawURL
-ms_token     = os.environ.get("MS_TOKEN")
-force_last   = os.environ.get("FORCE_LAST_REFRESH") == "1"
+ghRawURL   = config.ghRawURL
+ms_token   = os.environ.get("MS_TOKEN")
+force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
-# Parse optional proxy JSON from env
-proxy_str    = os.environ.get("TIKTOK_PROXY")
-proxies_list = [json.loads(proxy_str)] if proxy_str else None
+# Pull a single proxy URL from the env (or None)
+proxy = os.environ.get("TIKTOK_PROXY")
 
 async def runscreenshot(playwright, url, screenshotpath):
-    browser = await playwright.chromium.launch()
+    # If TikTok blocks direct image loads, route screenshot through your proxy
+    launch_args = {}
+    if proxy:
+        launch_args["proxy"] = { "server": proxy }
+    browser = await playwright.chromium.launch(**launch_args)
     page    = await browser.new_page()
     await page.goto(url)
     await page.screenshot(path=screenshotpath, quality=20, type='jpeg')
@@ -80,7 +83,7 @@ async def user_videos():
                         sleep_after=3,
                         headless=False,
                         browser='webkit',
-                        proxies=proxies_list
+                        proxy=proxy
                     )
 
                     ttuser = api.user(user)
@@ -125,7 +128,10 @@ async def user_videos():
 
                             if candidate:
                                 try:
-                                    r = requests.get(candidate, timeout=20)
+                                    req_kwargs = { "timeout": 20 }
+                                    if proxy:
+                                        req_kwargs["proxies"] = { "http": proxy, "https": proxy }
+                                    r = requests.get(candidate, **req_kwargs)
                                     r.raise_for_status()
                                     video_bytes = r.content
                                 except Exception as e:
