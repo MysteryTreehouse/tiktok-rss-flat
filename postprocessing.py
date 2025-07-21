@@ -25,14 +25,15 @@ ms_token   = os.environ.get("MS_TOKEN")
 force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
 # Parse optional proxy JSON from env
-proxy_str    = os.environ.get("PROXY")
-proxies_list = [json.loads(proxy_str)] if proxy_str else None
+proxy_conf = json.loads(os.environ["PROXY"]) if os.environ.get("PROXY") else None
+proxies_list = [proxy_conf] if proxy_conf else None
+proxy_server = proxy_conf["server"] if proxy_conf else None
 
 async def runscreenshot(playwright, url, screenshotpath):
     launch_args = {}
-    if proxy_str:
-        # Playwright expects a dict with "server"
-        launch_args["proxy"] = {"server": proxy_str}
+    if proxy_conf:
+        # Playwright accepts the same dict you passed into TikTokApi.create_sessions
+        launch_args["proxy"] = proxy_conf
     browser = await playwright.chromium.launch(**launch_args)
     page    = await browser.new_page()
     await page.goto(url)
@@ -131,8 +132,11 @@ async def user_videos():
                             if candidate:
                                 try:
                                     req_kwargs = {"timeout": 20}
-                                    if proxy_str:
-                                        req_kwargs["proxies"] = {"http": proxy_str, "https": proxy_str}
+                                    if proxy_server:
+                                        req_kwargs["proxies"] = {
+                                            "http": proxy_server,
+                                            "https": proxy_server
+                                        }
                                     r = requests.get(candidate, **req_kwargs)
                                     r.raise_for_status()
                                     video_bytes = r.content
