@@ -24,14 +24,15 @@ ghRawURL   = config.ghRawURL
 ms_token   = os.environ.get("MS_TOKEN")
 force_last = os.environ.get("FORCE_LAST_REFRESH") == "1"
 
-# Pull a single proxy URL from the env (or None)
-proxy = os.environ.get("TIKTOK_PROXY")
+# Parse optional proxy JSON from env
+proxy_str    = os.environ.get("TIKTOK_PROXY")
+proxies_list = [json.loads(proxy_str)] if proxy_str else None
 
 async def runscreenshot(playwright, url, screenshotpath):
-    # If TikTok blocks direct image loads, route screenshot through your proxy
     launch_args = {}
-    if proxy:
-        launch_args["proxy"] = { "server": proxy }
+    if proxy_str:
+        # Playwright expects a dict with "server"
+        launch_args["proxy"] = {"server": proxy_str}
     browser = await playwright.chromium.launch(**launch_args)
     page    = await browser.new_page()
     await page.goto(url)
@@ -83,7 +84,7 @@ async def user_videos():
                         sleep_after=3,
                         headless=False,
                         browser='webkit',
-                        proxy=proxy
+                        proxies=proxies_list
                     )
 
                     ttuser = api.user(user)
@@ -128,9 +129,9 @@ async def user_videos():
 
                             if candidate:
                                 try:
-                                    req_kwargs = { "timeout": 20 }
-                                    if proxy:
-                                        req_kwargs["proxies"] = { "http": proxy, "https": proxy }
+                                    req_kwargs = {"timeout": 20}
+                                    if proxy_str:
+                                        req_kwargs["proxies"] = {"http": proxy_str, "https": proxy_str}
                                     r = requests.get(candidate, **req_kwargs)
                                     r.raise_for_status()
                                     video_bytes = r.content
